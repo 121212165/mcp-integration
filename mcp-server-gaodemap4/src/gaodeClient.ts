@@ -1,97 +1,84 @@
-import fetch from "node-fetch";
+const BASE = "https://restapi.amap.com";
+const KEY = process.env.GAODE_API_KEY || "";
 
-const API_KEY = process.env.GAODE_API_KEY || "";
+type Arg = [userArg: string, queryParam: string, type: string, desc: string];
 
-export class GaodeClient {
-  static async staticMap({ location, width, height }: { location: string; width: number; height: number }) {
-    const url = `https://restapi.amap.com/v3/staticmap?location=${encodeURIComponent(location)}&size=${width}*${height}&key=${API_KEY}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Static map API error");
-    return await res.buffer();
-  }
+interface ToolDef {
+  name: string;
+  desc: string;
+  required: string[];
+  endpoint: string;
+  args: Arg[];
+  binary?: boolean;
+}
 
-  static async trafficStatus({ region, type }: { region: string; type: string }) {
-    const url = `https://restapi.amap.com/v3/traffic/status/${type}?region=${encodeURIComponent(region)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
+const K: Arg = ["_key", "key", "string", ""];
 
-  static async weather({ region }: { region: string }) {
-    const url = `https://restapi.amap.com/v3/weather/weatherInfo?city=${encodeURIComponent(region)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
+const TOOLS: ToolDef[] = [
+  { name: "static_map",     desc: "Generate a static map image for a given location.", required: ["location","width","height"], endpoint: "/v3/staticmap",
+    args: [["location","location","string","Location coordinates"],["width","size","number","Image width"],["height","","number","Image height"],K], binary: true },
+  { name: "traffic_status", desc: "Get real-time traffic status for a region or route.", required: ["region","type"], endpoint: "/v3/traffic/status/{type}",
+    args: [["region","region","string","Region or coordinates"],["type","type","string","Type: rectangle/circle/route"],K] },
+  { name: "weather",        desc: "Get real-time weather and forecast for a region.", required: ["region"], endpoint: "/v3/weather/weatherInfo",
+    args: [["region","city","string","Region name or code"],K] },
+  { name: "geocode",        desc: "Convert address to coordinates.", required: ["address"], endpoint: "/v3/geocode/geo",
+    args: [["address","address","string","Address to geocode"],K] },
+  { name: "regeocode",      desc: "Convert coordinates to readable address.", required: ["location"], endpoint: "/v3/geocode/regeo",
+    args: [["location","location","string","Coordinates"],K] },
+  { name: "poi_search",     desc: "Search POI by keyword.", required: ["keyword"], endpoint: "/v3/place/text",
+    args: [["keyword","keywords","string","Search keyword"],["region","city","string","Region or city"],K] },
+  { name: "around_search",  desc: "Search POI around a point or in a polygon.", required: ["center"], endpoint: "/v3/place/around",
+    args: [["center","location","string","Center coordinates"],["radius","radius","number","Radius in meters"],["polygon","polygon","string","Polygon coordinates"],K] },
+  { name: "input_tips",     desc: "Get input suggestions for search keywords.", required: ["keyword"], endpoint: "/v3/assistant/inputtips",
+    args: [["keyword","keywords","string","Partial keyword"],["region","city","string","Region or city"],K] },
+  { name: "route_plan",     desc: "Plan route between two points.", required: ["origin","destination","mode"], endpoint: "/v3/direction/{mode}",
+    args: [["origin","origin","string","Origin coordinates"],["destination","destination","string","Destination coordinates"],K] },
+  { name: "coord_convert",  desc: "Convert between coordinate systems.", required: ["coords","from","to"], endpoint: "/v3/assistant/coordinate/convert",
+    args: [["coords","locations","string","Coordinates"],["from","coordsys","string","Source system"],["to","to","string","Target system"],K] },
+  { name: "ip_locate",      desc: "Locate by IP address.", required: ["ip"], endpoint: "/v3/ip",
+    args: [["ip","ip","string","IP address"],K] },
+  { name: "district_query", desc: "Query administrative districts.", required: ["keyword"], endpoint: "/v3/config/district",
+    args: [["keyword","keywords","string","District keyword or code"],K] },
+  { name: "geofence",       desc: "Set and monitor geofence.", required: ["region","action"], endpoint: "", args: [["region","region","string","Region"],["action","action","string","Action: create/query/delete"]] },
+  { name: "id_query",       desc: "Query POI by unique ID.", required: ["id"], endpoint: "/v3/place/detail",
+    args: [["id","id","string","POI unique ID"],K] },
+  { name: "falcon_track",   desc: "Professional trajectory tracking service.", required: ["device_id"], endpoint: "",
+    args: [["device_id","device_id","string","Device ID"],["start_time","start_time","string","Start time"],["end_time","end_time","string","End time"]] },
+];
 
-  static async geocode({ address }: { address: string }) {
-    const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
+function buildUrl(tool: ToolDef, a: Record<string, unknown>): string {
+  const ep = tool.endpoint.replace(/\{(\w+)\}/g, (_, k) => String(a[k] || ""));
+  const parts = tool.args
+    .map(([arg, param]) => {
+      const val = param === "size" ? `${a.width}*${a.height}` : a[arg];
+      return val != null && val !== "" ? `${param || arg}=${encodeURIComponent(String(val))}` : null;
+    })
+    .filter(Boolean);
+  parts.push(`key=${KEY}`);
+  return `${BASE}${ep}?${parts.join("&")}`;
+}
 
-  static async regeocode({ location }: { location: string }) {
-    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${encodeURIComponent(location)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
+export async function callApi(tool: ToolDef, a: Record<string, unknown>): Promise<unknown> {
+  if (!tool.endpoint) return { ...a, status: "not_implemented" };
+  const res = await fetch(buildUrl(tool, a));
+  if (!res.ok) throw new Error(`${tool.name} API error: ${res.status}`);
+  return tool.binary ? Buffer.from(await res.arrayBuffer()) : await res.json();
+}
 
-  static async poiSearch({ keyword, region }: { keyword: string; region?: string }) {
-    const url = `https://restapi.amap.com/v3/place/text?keywords=${encodeURIComponent(keyword)}${region ? `&city=${encodeURIComponent(region)}` : ""}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
+export function getTools() {
+  return TOOLS.map(({ name, desc, required, args }) => ({
+    name,
+    description: desc,
+    inputSchema: {
+      type: "object",
+      properties: Object.fromEntries(
+        args.filter(([a]) => a !== "_key").map(([a, , t, d]) => [a, { type: t, description: d }])
+      ),
+      required,
+    },
+  }));
+}
 
-  static async aroundSearch({ center, radius, polygon }: { center: string; radius?: number; polygon?: string }) {
-    let url = `https://restapi.amap.com/v3/place/around?location=${encodeURIComponent(center)}&key=${API_KEY}`;
-    if (radius) url += `&radius=${radius}`;
-    if (polygon) url += `&polygon=${encodeURIComponent(polygon)}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async inputTips({ keyword, region }: { keyword: string; region?: string }) {
-    let url = `https://restapi.amap.com/v3/assistant/inputtips?keywords=${encodeURIComponent(keyword)}&key=${API_KEY}`;
-    if (region) url += `&city=${encodeURIComponent(region)}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async routePlan({ origin, destination, mode }: { origin: string; destination: string; mode: string }) {
-    const url = `https://restapi.amap.com/v3/direction/${mode}?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async coordConvert({ coords, from, to }: { coords: string; from: string; to: string }) {
-    const url = `https://restapi.amap.com/v3/assistant/coordinate/convert?locations=${encodeURIComponent(coords)}&coordsys=${from}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async ipLocate({ ip }: { ip: string }) {
-    const url = `https://restapi.amap.com/v3/ip?ip=${encodeURIComponent(ip)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async districtQuery({ keyword }: { keyword: string }) {
-    const url = `https://restapi.amap.com/v3/config/district?keywords=${encodeURIComponent(keyword)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async geofence({ region, action }: { region: string; action: string }) {
-    // 伪实现，具体API需根据高德开放平台文档调整
-    return { region, action, status: "not_implemented" };
-  }
-
-  static async idQuery({ id }: { id: string }) {
-    const url = `https://restapi.amap.com/v3/place/detail?id=${encodeURIComponent(id)}&key=${API_KEY}`;
-    const res = await fetch(url);
-    return await res.json();
-  }
-
-  static async falconTrack({ device_id, start_time, end_time }: { device_id: string; start_time?: string; end_time?: string }) {
-    // 伪实现，具体API需根据高德开放平台文档调整
-    return { device_id, start_time, end_time, status: "not_implemented" };
-  }
+export function findTool(name: string) {
+  return TOOLS.find((t) => t.name === name);
 }
